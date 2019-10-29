@@ -1959,6 +1959,9 @@ static struct config_bool ConfigureNamesBool[] =
 };
 
 
+/*
+ *对应着 config_int结构体， 初始化config_generic结构体只需要初始化前6个子段，后面的在运行时初始化
+ */
 static struct config_int ConfigureNamesInt[] =
 {
 	{

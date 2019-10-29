@@ -282,7 +282,7 @@ endif
 ##########################################################################
 
 clean:
-	rm -f $(LOCALOBJS) postgres$(X) $(POSTGRES_IMP)
+	rm -f $(LOCALOBJS)  $(POSTGRES_IMP)
 ifeq ($(PORTNAME), cygwin)
 	rm -f postgres.dll libpostgres.a
 endif

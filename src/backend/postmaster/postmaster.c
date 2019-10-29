@@ -568,11 +568,14 @@ PostmasterMain(int argc, char *argv[])
 {
 	int			opt;
 	int			status;
-	char	   *userDoption = NULL;
+	char	   *userDoption = NULL;   /*数据目录 : data/  */
 	bool		listen_addr_saved = false;
 	int			i;
 	char	   *output_config_variable = NULL;
 
+	/*
+	 * 设置 MyProcPid MyStartTime  MyStartTimestamp  随机种子
+	 */
 	InitProcessGlobals();
 
 	PostmasterPid = MyProcPid;
@@ -594,13 +597,15 @@ PostmasterMain(int argc, char *argv[])
 	 * the PostmasterContext, which is space that can be recycled by backends.
 	 * Allocated data that needs to be available to backends should be
 	 * allocated in TopMemoryContext.
+	 * 创建PostmasterContext结构，以供postmaster进程使用内存
+	 * 调用 palloc() 函数会在  PostmasterContext上分配内存，可以被后端进程循环使用
 	 */
 	PostmasterContext = AllocSetContextCreate(TopMemoryContext,
 											  "Postmaster",
 											  ALLOCSET_DEFAULT_SIZES);
 	MemoryContextSwitchTo(PostmasterContext);
 
-	/* Initialize paths to installation files */
+	/* Initialize paths to installation files 检查进程安装路径*/
 	getInstallationPaths(argv[0]);
 
 	/*
@@ -658,7 +663,7 @@ PostmasterMain(int argc, char *argv[])
 #endif
 
 	/*
-	 * Options setup
+	 * Options setup  初始化全局参数结构体
 	 */
 	InitializeGUCOptions();
 
@@ -843,6 +848,7 @@ PostmasterMain(int argc, char *argv[])
 
 	/*
 	 * Postmaster accepts no non-option switch arguments.
+	 * optind是getopt下一次获取参数的index， 实际上即满足  optind == argc
 	 */
 	if (optind < argc)
 	{
@@ -856,6 +862,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Locate the proper configuration files and data directory, and read
 	 * postgresql.conf for the first time.
+	 * 读取postgres.conf文件，这里会给一批全局变量赋值,example: DataDir
 	 */
 	if (!SelectConfigFiles(userDoption, progname))
 		ExitPostmaster(2);
@@ -866,6 +873,7 @@ PostmasterMain(int argc, char *argv[])
 		 * "-C guc" was specified, so print GUC's value and exit.  No extra
 		 * permission check is needed because the user is reading inside the
 		 * data dir.
+		 * example:  pg_ctl -C  log_filename    命令将会把log_filename配置展示出来
 		 */
 		const char *config_val = GetConfigOption(output_config_variable,
 												 false, false);
@@ -874,17 +882,18 @@ PostmasterMain(int argc, char *argv[])
 		ExitPostmaster(0);
 	}
 
-	/* Verify that DataDir looks reasonable */
+	/* Verify that DataDir looks reasonable 检查数据文件*/
 	checkDataDir();
 
-	/* Check that pg_control exists */
+	/* Check that pg_control exists  检查pg_control文件*/
 	checkControlFile();
 
 	/* And switch working directory into it */
 	ChangeToDataDir();
 
 	/*
-	 * Check for invalid combinations of GUC settings.
+	 * Check for invalid combinations of GUC settings.  检测配置是否正确
+	 * ReservedBackends通过配置文件中 superuser_reserved_connections  获取
 	 */
 	if (ReservedBackends >= MaxConnections)
 	{
@@ -893,6 +902,7 @@ PostmasterMain(int argc, char *argv[])
 					 ReservedBackends, MaxConnections);
 		ExitPostmaster(1);
 	}
+	/*  XLogArchiveMode 通过配置文件中 archive_mode 获取*/
 	if (XLogArchiveMode > ARCHIVE_MODE_OFF && wal_level == WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
 				(errmsg("WAL archival cannot be enabled when wal_level is \"minimal\"")));
@@ -903,6 +913,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Other one-time internal sanity checks can go here, if they are fast.
 	 * (Put any slow processing further down, after postmaster.pid creation.)
+	 * 检测数据符号，比如 apr  april 都可以代表4月，诸如此类符号
 	 */
 	if (!CheckDateTokenTables())
 	{
@@ -913,6 +924,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Now that we are done processing the postmaster arguments, reset
 	 * getopt(3) library so that it will work correctly in subprocesses.
+	 * 将 optind设置为 1 ,确保其子进程 通过 getopt获取参数列表时从 第二个开始
 	 */
 	optind = 1;
 #ifdef HAVE_INT_OPTRESET
@@ -949,6 +961,7 @@ PostmasterMain(int argc, char *argv[])
 	 * is responsible for removing both data directory and socket lockfiles;
 	 * so it must happen before opening sockets so that at exit, the socket
 	 * lockfiles go away after CloseServerPorts runs.
+	 * 处理 postmaster.pid  可能等待老的进程释放该文件
 	 */
 	CreateDataDirLockFile(true);
 
@@ -960,6 +973,7 @@ PostmasterMain(int argc, char *argv[])
 	 * The postmaster will do the test once at startup, and then its child
 	 * processes will inherit the correct function pointer and not need to
 	 * repeat the test.
+	 * 读pg_control文件，做CRC检测
 	 */
 	LocalProcessControlFile(false);
 
@@ -979,17 +993,26 @@ PostmasterMain(int argc, char *argv[])
 	 * it needs to be called before InitializeMaxBackends(), and it's probably
 	 * a good idea to call it before any modules had chance to take the
 	 * background worker slots.
+	 * 注册一个 负责逻辑复制的进程
 	 */
 	ApplyLauncherRegister();
 
 	/*
 	 * process any libraries that should be preloaded at postmaster start
+	 * 加载动态库
 	 */
 	process_shared_preload_libraries();
 
 	/*
 	 * Now that loadable modules have had their chance to register background
 	 * workers, calculate MaxBackends.
+	 * 计算 MaxBackends = MaxConnections + autovacuum_max_workers + 1 + max_worker_processes + max_wal_senders
+	 * 默认如下：
+	 * MaxConnections=100
+	 * autovacuum_max_workers = 3
+	 * max_worker_processes = 8
+	 * max_wal_senders = 10
+	 * 默认MaxBackends = 122
 	 */
 	InitializeMaxBackends();
 
@@ -1006,6 +1029,9 @@ PostmasterMain(int argc, char *argv[])
 	for (i = 0; i < MAXLISTEN; i++)
 		ListenSocket[i] = PGINVALID_SOCKET;
 
+	/*
+	 * 注册推出处理函数，其实现是将函数和参数封装为一个结构体，添加到一个列表中
+	 * */
 	on_proc_exit(CloseServerPorts, 0);
 
 	if (ListenAddresses)
@@ -1015,7 +1041,7 @@ PostmasterMain(int argc, char *argv[])
 		ListCell   *l;
 		int			success = 0;
 
-		/* Need a modifiable copy of ListenAddresses */
+		/* Need a modifiable copy of ListenAddresses 拷贝ListenAddresses，strdup会malloc一块内存,需要free*/
 		rawstring = pstrdup(ListenAddresses);
 
 		/* Parse string into list of hostnames */
@@ -1174,12 +1200,14 @@ PostmasterMain(int argc, char *argv[])
 
 	/*
 	 * Set up shared memory and semaphores.
+	 * 设置共享内存和信号
 	 */
 	reset_shared(PostPortNumber);
 
 	/*
 	 * Estimate number of openable files.  This must happen after setting up
 	 * semaphores, because on some platforms semaphores count as open files.
+	 * 设置最大可打开的文件句柄
 	 */
 	set_max_safe_fds();
 
@@ -1191,6 +1219,8 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Initialize pipe (or process handle on Windows) that allows children to
 	 * wake up from sleep on postmaster death.
+	 * 初始化 postmaster状态监控句柄， 通过一个 pipe来实现， postmaster负责写，子进程负责读
+	 * postmaster要关闭读端， 子进程关闭写端
 	 */
 	InitPostmasterDeathWatchHandle();
 
@@ -1208,6 +1238,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Record postmaster options.  We delay this till now to avoid recording
 	 * bogus options (eg, NBuffers too high for available memory).
+	 * 创建并写 postmaster.opts文件
 	 */
 	if (!CreateOptsFile(argc, argv, my_exec_path))
 		ExitPostmaster(1);
@@ -1279,6 +1310,8 @@ PostmasterMain(int argc, char *argv[])
 
 	/*
 	 * If enabled, start up syslogger collection subprocess
+	 * 启动日志收集进程, 通过管道来实现
+	 * 其他进程拥有管道的写端，将 stderr重定向到管道写端, 日至进程拥有管道的读端
 	 */
 	SysLoggerPID = SysLogger_Start();
 
@@ -1304,11 +1337,13 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Initialize stats collection subsystem (this does NOT start the
 	 * collector process!)
+	 *
 	 */
 	pgstat_init();
 
 	/*
 	 * Initialize the autovacuum subsystem (again, no process start yet)
+	 * 只做检查
 	 */
 	autovac_init();
 
@@ -1365,6 +1400,7 @@ PostmasterMain(int argc, char *argv[])
 
 	/*
 	 * We're ready to rock and roll...
+	 * 启动进程, 负责pg启动前的各项准备工作，主要包括 wal管理
 	 */
 	StartupPID = StartupDataBase();
 	Assert(StartupPID != 0);
@@ -2563,6 +2599,7 @@ ClosePostmasterPorts(bool am_syslogger)
  * InitProcessGlobals -- set MyProcPid, MyStartTime[stamp], random seeds
  *
  * Called early in the postmaster and every backend.
+ * 设置进程全局变量
  */
 void
 InitProcessGlobals(void)

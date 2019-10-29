@@ -73,6 +73,17 @@ main(int argc, char *argv[])
 
 	/*
 	 * Platform-specific startup hacks
+	 * 多种平台的适配,初始化自旋锁
+	 * 自旋锁的实现是为了保护一段短小的临界区操作代码，保证这个临界区的操作是原子的，
+	 * 从而避免并发的竞争冒险。在Linux内核中，自旋锁通常用于包含内核数据结构的操作，
+	 * 你可以看到在许多内核数据结构中都嵌入有spinlock，这些大部分就是用于保证它自身被操作的原子性，
+	 * 在操作这样的结构体时都经历这样的过程：上锁-操作-解锁。
+	 *
+     * 如果内核控制路径发现自旋锁“开着”（可以获取），就获取锁并继续自己的执行。
+     * 相反，如果内核控制路径发现锁由运行在另一个CPU上的内核控制路径“锁着”，就在原地“旋转”，
+     * 反复执行一条紧凑的循环检测指令，直到锁被释放。 自旋锁是循环检测“忙等”，即等待时内核无事可做（除了浪费时间），
+     * 进程在CPU上保持运行，所以它保护的临界区必须小，且操作过程必须短。不过，自旋锁通常非常方便，
+     * 因为很多内核资源只锁1毫秒的时间片段，所以等待自旋锁的释放不会消耗太多CPU的时间
 	 */
 	startup_hacks(progname);
 
@@ -95,6 +106,7 @@ main(int argc, char *argv[])
 	 * Code after this point is allowed to use elog/ereport, though
 	 * localization of messages may not work right away, and messages won't go
 	 * anywhere but stderr until GUC settings get loaded.
+	 * 初始化TopMemoryContext
 	 */
 	MemoryContextInit();
 
@@ -142,6 +154,8 @@ main(int argc, char *argv[])
 	/*
 	 * We keep these set to "C" always, except transiently in pg_locale.c; see
 	 * that file for explanations.
+	 * 设置C语言环境; 在Linux中通过locale来设置程序运行的不同语言环境，locale由ANSI C提供支持。
+	 * locale的命名规则为<语言>_<地区>.<字符集编码>，如zh_CN.UTF-8，zh代表中文，CN代表大陆地区，UTF-8表示字符集
 	 */
 	init_locale("LC_MONETARY", LC_MONETARY, "C");
 	init_locale("LC_NUMERIC", LC_NUMERIC, "C");
@@ -151,6 +165,7 @@ main(int argc, char *argv[])
 	 * Now that we have absorbed as much as we wish to from the locale
 	 * environment, remove any LC_ALL setting, so that the environment
 	 * variables installed by pg_perm_setlocale have force.
+	 * 清空现有设置
 	 */
 	unsetenv("LC_ALL");
 
@@ -225,7 +240,7 @@ main(int argc, char *argv[])
 					 NULL,		/* no dbname */
 					 strdup(get_user_name_or_exit(progname)));	/* does not return */
 	else
-		PostmasterMain(argc, argv); /* does not return */
+		PostmasterMain(argc, argv); /* does not return 正常启动pg的入口*/
 	abort();					/* should not get here */
 }
 
