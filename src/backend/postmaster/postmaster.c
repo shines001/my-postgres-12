@@ -562,6 +562,7 @@ HANDLE		PostmasterHandle;
 
 /*
  * Postmaster main entry point
+ * postmaster入口
  */
 void
 PostmasterMain(int argc, char *argv[])
@@ -1200,7 +1201,7 @@ PostmasterMain(int argc, char *argv[])
 
 	/*
 	 * Set up shared memory and semaphores.
-	 * 设置共享内存和信号
+	 * 设置共享内存和信号量
 	 */
 	reset_shared(PostPortNumber);
 
@@ -2610,7 +2611,7 @@ InitProcessGlobals(void)
 	MyStartTimestamp = GetCurrentTimestamp();
 	MyStartTime = timestamptz_to_time_t(MyStartTimestamp);
 
-	/*
+	/* 从 /dev/urandom获取随机种子，然后用srandom设置种子
 	 * Set a different seed for random() in every process.  We want something
 	 * unpredictable, so if possible, use high-quality random bits for the
 	 * seed.  Otherwise, fall back to a seed based on timestamp and PID.

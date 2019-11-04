@@ -102,8 +102,8 @@ CreateSharedMemoryAndSemaphores(int port)
 		int			numSemas;
 
 		/* Compute number of semaphores we'll need */
-		numSemas = ProcGlobalSemas();
-		numSemas += SpinlockSemas();
+		numSemas = ProcGlobalSemas();  // numSemas=126 MaxBackends=122  NUM_AUXILIARY_PROCS=4
+		numSemas += SpinlockSemas();   // numSemas=126
 
 		/*
 		 * Size of the Postgres shared-memory block is estimated via
@@ -168,7 +168,7 @@ CreateSharedMemoryAndSemaphores(int port)
 		InitShmemAccess(seghdr);
 
 		/*
-		 * Create semaphores
+		 * Create semaphores,从共享内存中申请 126*128长度的空间； 每个信号量长度为128byte
 		 */
 		PGReserveSemaphores(numSemas, port);
 

@@ -644,7 +644,7 @@ PGSharedMemoryCreate(Size size, int port,
 
 	if (shared_memory_type == SHMEM_TYPE_MMAP)
 	{
-		AnonymousShmem = CreateAnonymousSegment(&size);
+		AnonymousShmem = CreateAnonymousSegment(&size); //使用mmap创建匿名内存
 		AnonymousShmemSize = size;
 
 		/* Register on-exit routine to unmap the anonymous segment */
