@@ -98,6 +98,9 @@ typedef XLogLongPageHeaderData *XLogLongPageHeader;
 	 (IsPowerOf2(size) && \
 	 ((size) >= WalSegMinSize && (size) <= WalSegMaxSize))
 
+/*
+ * 每个lsn包含的 logic文件个数, 相当于  2^64 / 2^32 =  2^32
+ */
 #define XLogSegmentsPerXLogId(wal_segsz_bytes)	\
 	(UINT64CONST(0x100000000) / (wal_segsz_bytes))
 
@@ -126,6 +129,8 @@ typedef XLogLongPageHeaderData *XLogLongPageHeader;
  *
  * For XLByteInSeg, do the computation at face value.  For XLByteInPrevSeg,
  * a boundary byte is taken to be in the previous segment.
+ * lsn 前4个bytes是物理ID， 第5个byte是逻辑ID，最后3byte位是文件内offset， 2^24 = 16 * 1024 * 1024
+ * 综上可以用  lsn/DEFAULT_XLOG_SEG_SIZE  就是segment文件的 XLogSegNo
  */
 #define XLByteInSeg(xlrp, logSegNo, wal_segsz_bytes) \
 	(((xlrp) / (wal_segsz_bytes)) == (logSegNo))

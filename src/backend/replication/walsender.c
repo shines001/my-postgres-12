@@ -1597,6 +1597,7 @@ exec_replication_command(const char *cmd_string)
 /*
  * Process any incoming messages while streaming. Also checks if the remote
  * end has closed the connection.
+ * 处理流复制过程中的输入信息，同时也会检测远端是否关闭连接
  */
 static void
 ProcessRepliesIfAny(void)
@@ -1605,11 +1606,16 @@ ProcessRepliesIfAny(void)
 	int			r;
 	bool		received = false;
 
+	/*上次执行 ProcessRepliesIfAny的时间戳*/
 	last_processing = GetCurrentTimestamp();
 
 	for (;;)
 	{
+		/*
+		 * PqCommReadingMsg置为true, pg_get*函数的先决条件
+		 */
 		pq_startmsgread();
+
 		r = pq_getbyte_if_available(&firstchar);
 		if (r < 0)
 		{
@@ -2382,8 +2388,16 @@ retry:
 		int			segbytes;
 		int			readbytes;
 
+		/*
+		 * 基于lsn 获取 offset, 即wal记录在文件内的偏移量
+		 */
 		startoff = XLogSegmentOffset(recptr, wal_segment_size);
 
+		/*
+		 * 如果sendFile句柄未打开 或者当前要读取的seg文件和已经保存的seg文件号不一致,进行以下处理
+		 * sendFile: 打开的wal文件句柄
+		 * sendSegNo: 要发送的walseg编号， 相当于 lsn/2^24， 即lsn的前40bit
+		 */
 		if (sendFile < 0 || !XLByteInSeg(recptr, sendSegNo, wal_segment_size))
 		{
 			char		path[MAXPGPATH];
@@ -2392,6 +2406,10 @@ retry:
 			if (sendFile >= 0)
 				close(sendFile);
 
+			/*
+			 * 从当前要读取的lsn号计算出 sendSegNo， 实际上是取lsn的前40bit，即lsn/2^24
+			 * sendSegNo = (recptr) / (wal_segment_size)
+			 */
 			XLByteToSeg(recptr, sendSegNo, wal_segment_size);
 
 			/*-------
@@ -2425,11 +2443,21 @@ retry:
 			{
 				XLogSegNo	endSegNo;
 
+				/*
+				 * 从最新的 lsn获取logSegNo，如果跟已经发送的一致，说明切换过TLI,获取新的TLI
+				 */
 				XLByteToSeg(sendTimeLineValidUpto, endSegNo, wal_segment_size);
 				if (sendSegNo == endSegNo)
 					curFileTimeLine = sendTimeLineNextTLI;
 			}
 
+			/*
+			 * 获取wal文件的名
+			 * 	snprintf(path, 1024, "pg_wal/%08X%08X%08X", curFileTimeLine,
+			 *  (uint32) ((sendSegNo) / 2^32),
+			 *  (uint32) ((sendSegNo) % X2^32))
+			 *  )
+			 */
 			XLogFilePath(path, curFileTimeLine, sendSegNo, wal_segment_size);
 
 			sendFile = BasicOpenFile(path, O_RDONLY | PG_BINARY);
@@ -2454,7 +2482,7 @@ retry:
 			sendOff = 0;
 		}
 
-		/* Need to seek in the file? */
+		/* Need to seek in the file? 如果发生了TLI切换，需要定位到lsn指定的offset处*/
 		if (sendOff != startoff)
 		{
 			if (lseek(sendFile, (off_t) startoff, SEEK_SET) < 0)
@@ -2466,7 +2494,9 @@ retry:
 			sendOff = startoff;
 		}
 
-		/* How many bytes are within this segment? */
+		/* How many bytes are within this segment? 如果请求发送的大小大于 此 segment文件剩余的大小，则缩小之
+		 * 确保每次read不会跨 segment文件
+		 * */
 		if (nbytes > (wal_segment_size - startoff))
 			segbytes = wal_segment_size - startoff;
 		else

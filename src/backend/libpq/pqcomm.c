@@ -39,10 +39,10 @@
  * INTERFACE ROUTINES
  *
  * setup/teardown:
- *		StreamServerPort	- Open postmaster's server port
- *		StreamConnection	- Create new connection with client
- *		StreamClose			- Close a client/backend connection
- *		TouchSocketFiles	- Protect socket files against /tmp cleaners
+ *		StreamServerPort	- Open postmaster's server port  创建监听 socket()==>bind()==>listen()
+ *		StreamConnection	- Create new connection with client  从监听fd获取新的连接fd，  port-sock=accpet(...)
+ *		StreamClose			- Close a client/backend connection  关闭连接,只是标记fd
+ *		TouchSocketFiles	- Protect socket files against /tmp cleaners 修改socket文件读取时间，以防止/tmp目录被清除
  *		pq_init			- initialize libpq at backend startup
  *		pq_comm_reset	- reset libpq during error recovery
  *		pq_close		- shutdown libpq at backend exit
@@ -129,6 +129,7 @@ static List *sock_paths = NIL;
  *
  * The receive buffer is fixed size. Send buffer is usually 8k, but can be
  * enlarged by pq_putmessage_noblock() if the message doesn't fit otherwise.
+ * 接收buffer是固定的8k， 发送buffer默认是8k，但在nonblock模式下可以增加
  */
 
 #define PQ_SEND_BUFFER_SIZE 8192
@@ -711,6 +712,8 @@ Setup_AF_UNIX(char *sock_path)
  *		socket is ready for accept().
  *
  * RETURNS: STATUS_OK or STATUS_ERROR
+ * 创建一个新的连接，用来和client通讯， 关键：  port->sock = accept(...)
+ * 然后对Port类进行赋值， 设置 remote addr, local addr, no delay,  keepalive等字段
  */
 int
 StreamConnection(pgsocket server_fd, Port *port)
@@ -855,6 +858,8 @@ StreamClose(pgsocket sock)
  * change the mod date).  That saves them from being removed by
  * overenthusiastic /tmp-directory-cleaner daemons.  (Another reason we should
  * never have put the socket file in /tmp...)
+ *
+ * 修改文件的 访问时间和修改时间， utime函数中的第二个参数NULL表示将以上时间设置为当前时间
  */
 void
 TouchSocketFiles(void)
@@ -934,6 +939,8 @@ socket_set_nonblocking(bool nonblocking)
  *		pq_recvbuf - load some bytes into the input buffer
  *
  *		returns 0 if OK, EOF if trouble
+ *		先整理 PqRecvPointer和 PqRecvLength,如果有一部分缓存被读过了，则移动；
+ *		循环调用  secure_read直到填满 PqRecvBuffer缓冲区
  * --------------------------------
  */
 static int
@@ -1035,6 +1042,7 @@ pq_peekbyte(void)
  *
  * The received byte is stored in *c. Returns 1 if a byte was read,
  * 0 if no data was available, or EOF if trouble.
+ * 获取一个字节的数据， 有数据则返回1， 无数据返回0
  * --------------------------------
  */
 int
@@ -1161,6 +1169,7 @@ pq_discardbytes(size_t len)
  *		even though this is presumably useful only for text.
  *
  *		returns 0 if OK, EOF if trouble
+ *		从 PqRecvBuffer读取数据到 s中，如果中间遇到  '\0'则停止，否则把所有数据都读取到s中直到socket返回EOF
  * --------------------------------
  */
 int
@@ -1205,6 +1214,7 @@ pq_getstring(StringInfo s)
  *		pq_startmsgread - begin reading a message from the client.
  *
  *		This must be called before any of the pq_get* functions.
+ *		将PqCommReadingMsg的状态修改为true，这个是所有 pg_get*函数的开关
  * --------------------------------
  */
 void
@@ -1306,6 +1316,7 @@ pq_getmessage(StringInfo s, int maxlen)
 		 * Allocate space for message.  If we run out of room (ridiculously
 		 * large message), we will elog(ERROR), but we want to discard the
 		 * message body so as not to lose communication sync.
+		 * 实现一个  try  catch； 如果消息过大导致内存不足，我们就丢弃这个消息
 		 */
 		PG_TRY();
 		{
